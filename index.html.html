@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>NW PHO E-Time System - Complete Staff Management | CDC Supported Project</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.30.0/dist/tabler-icons.min.css">
+    <style>
+        :root {
+            --color-background-primary: #ffffff;
+            --color-background-secondary: #f8f9fc;
+            --color-background-tertiary: #f1f4f9;
+            --color-text-primary: #1a2c3e;
+            --color-text-secondary: #5a6e7c;
+            --color-text-tertiary: #9aaebf;
+            --color-border-primary: #e2e8f0;
+            --color-border-secondary: #cbd5e1;
+            --color-border-tertiary: #eef2f6;
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            --font-mono: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+            --border-radius-sm: 4px;
+            --border-radius-md: 8px;
+            --border-radius-lg: 12px;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: var(--font-sans); background: var(--color-background-tertiary); color: var(--color-text-primary); line-height: 1.4; }
+        input, select, textarea, button { font-family: inherit; }
+        input, select, textarea, .file-input-wrapper {
+            padding: 8px 11px;
+            border: 0.5px solid var(--color-border-secondary);
+            border-radius: var(--border-radius-md);
+            background: var(--color-background-primary);
+            font-size: 13px;
+            outline: none;
+            transition: all 0.15s;
+        }
+        input:focus, select:focus, textarea:focus {
+            border-color: #0f4c75;
+            box-shadow: 0 0 0 2px rgba(15, 76, 117, 0.1);
+        }
+        button { cursor: pointer; }
+        .gps-badge {
+            background: #eaf3de;
+            color: #27500a;
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 20px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .live-indicator { animation: pulse 1.5s infinite; }
+        .status-active { background: #faeeda; color: #854f0b; }
+        .status-approved { background: #eaf3de; color: #27500a; }
+        @media (max-width: 768px) { .hide-mobile { display: none; } }
+        .file-input-wrapper { position: relative; overflow: hidden; display: inline-block; }
+        .file-input-wrapper input { position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px 12px; text-align: left; border-bottom: 0.5px solid var(--color-border-tertiary); }
+        th { background: var(--color-background-secondary); font-weight: 500; font-size: 12px; color: var(--color-text-secondary); }
+        .report-btn { background: #0f4c75; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 11px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+    </style>
+</head>
+<body>
+<div id="root" style="min-height:600px;"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/babel-standalone@6.26.0/babel.min.js"></script>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback, useMemo } = React;
+
+// ==================== CONSTANTS & HELPERS ====================
+const TODAY = new Date().toISOString().split('T')[0];
+const NOW = () => new Date().toTimeString().slice(0,5);
+const getWeekRange = () => {
+    const now = new Date();
+    const start = new Date(now.setDate(now.getDate() - now.getDay()));
+    const end = new Date(now.setDate(now.getDate() - now.getDay() + 6));
+    return { start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] };
+};
+const getMonthRange = () => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    return { start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] };
+};
+
+const fmtDate = d => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'}) : '—';
+const fmtDateTime = dt => dt ? new Date(dt).toLocaleString() : '—';
+const getInitials = n => n.split(' ').map(x=>x[0]).join('').slice(0,2).toUpperCase();
+const calculateHours = (clockIn, clockOut) => {
+    if (!clockIn || !clockOut) return 0;
+    const [cih, cim] = clockIn.split(':').map(Number);
+    const [coh, com] = clockOut.split(':').map(Number);
+    let minutes = (coh * 60 + com) - (cih * 60 + cim);
+    minutes = Math.max(0, minutes - 60); // Subtract 1 hour lunch
+    return parseFloat((minutes / 60).toFixed(2));
+};
+
+const DISTRICTS = ['Solwezi', 'Kasempa', 'Zambezi', 'Kabompo', 'Mufumbwe', 'Chavuma', 'Manyinga'];
+const DEPTS = ['Clinical', 'Laboratory', 'Pharmacy', 'M&E', 'Prevention', 'Community', 'Administration'];
+const LEAVE_TYPES = ['Annual', 'Sick', 'Emergency', 'Maternity', 'Study'];
+const ASSET_TYPES = ['Laptop', 'Phone', 'Modem', 'Printer', 'Vehicle', 'Tablet', 'Other'];
+const ASSET_ICON = { Laptop:'ti-device-laptop', Phone:'ti-device-mobile', Modem:'ti-wifi', Printer:'ti-printer', Vehicle:'ti-car', Tablet:'ti-device-tablet', Other:'ti-package' };
+
+// NW Province clinic locations
+const VALID_LOCATIONS = [
+    { name: 'Solwezi District Hospital', lat: -12.1833, lng: 26.3833, district: 'Solwezi', radius: 500 },
+    { name: 'Solwezi District Office', lat: -12.1810, lng: 26.3850, district: 'Solwezi', radius: 200 },
+    { name: 'Kasempa District Hospital', lat: -13.4667, lng: 25.8333, district: 'Kasempa', radius: 500 },
+    { name: 'Zambezi General Hospital', lat: -13.5333, lng: 23.1167, district: 'Zambezi', radius: 500 },
+    { name: 'Kabompo District Hospital', lat: -13.5833, lng: 24.2000, district: 'Kabompo', radius: 500 },
+    { name: 'Mufumbwe District Hospital', lat: -13.6833, lng: 24.8000, district: 'Mufumbwe', radius: 500 },
+    { name: 'Chavuma District Hospital', lat: -13.0167, lng: 22.7000, district: 'Chavuma', radius: 500 },
+    { name: 'Manyinga Health Centre', lat: -13.1500, lng: 24.2500, district: 'Manyinga', radius: 300 },
+    { name: 'Field Office - Mobile', lat: 0, lng: 0, district: 'Mobile', radius: 0 }
+];
+
+// ==================== COMPONENTS ====================
+function Badge({text, color}) {
+    const C = { green: {bg:'#eaf3de', txt:'#27500a'}, red: {bg:'#fcebeb', txt:'#501313'}, amber: {bg:'#faeeda', txt:'#412402'}, blue: {bg:'#e6f1fb', txt:'#042c53'}, gray: {bg:'#f1efe8', txt:'#444441'} };
+    const c = C[color] || C.gray;
+    return <span style={{background:c.bg, color:c.txt, fontSize:10, padding:'2px 7px', borderRadius:3, fontWeight:500, textTransform:'capitalize', whiteSpace:'nowrap'}}>{text}</span>;
+}
+
+function Av({name, size=30}) {
+    const bgs = ['#b5d4f4','#9fe1cb','#f5c4b3','#f4c0d1','#fac775','#c0dd97'];
+    const txts = ['#042c53','#04342c','#4a1b0c','#4b1528','#412402','#173404'];
+    const i = name.charCodeAt(0) % 6;
+    return <div style={{width:size, height:size, borderRadius:'50%', background:bgs[i], display:'flex', alignItems:'center', justifyContent:'center', fontSize:size*0.33, fontWeight:500, color:txts[i], flexShrink:0}}>{getInitials(name)}</div>;
+}
+
+function GPSStatus({location, accuracy}) {
+    if (!location) return <span className="gps-badge"><i className="ti ti-map-pin-off" style={{fontSize:12}}></i> No GPS</span>;
+    const isValid = location.verified;
+    return (
+        <span className="gps-badge" style={{background: isValid ? '#eaf3de' : '#fcebeb', color: isValid ? '#27500a' : '#501313'}}>
+            <i className={`ti ${isValid ? 'ti-map-pin-check' : 'ti-alert-triangle'}`} style={{fontSize:12}}></i>
+            {isValid ? location.place : 'Location mismatch'}
+            {accuracy && <span style={{fontSize:9, marginLeft:4}}>±{Math.round(accuracy)}m</span>}
+        </span>
+    );
+}
+
+// ==================== INITIAL DATA ====================
+const INIT_STAFF = [
+    {id:1, name:'Mwansa Chanda', nrc:'123456/78/1', position:'HIV Prevention Officer', department:'Prevention', district:'Solwezi', type:'CoAg', contact:'0977123456', email:'mchanda@nwpho.gov.zm', dateEngaged:'2022-01-15', status:'active', password:'1234'},
+    {id:2, name:'Beatrice Mwale', nrc:'234567/89/2', position:'District M&E Officer', department:'M&E', district:'Kasempa', type:'CoAg', contact:'0966234567', email:'bmwale@nwpho.gov.zm', dateEngaged:'2021-06-01', status:'active', password:'1234'},
+    {id:3, name:'Patrick Mutale', nrc:'345678/90/3', position:'Lab Technologist', department:'Laboratory', district:'Zambezi', type:'CoAg', contact:'0955345678', email:'pmutale@nwpho.gov.zm', dateEngaged:'2023-03-10', status:'active', password:'1234'},
+    {id:4, name:'Grace Nkumbula', nrc:'456789/01/4', position:'ART Provider', department:'Clinical', district:'Kabompo', type:'CoAg', contact:'0977456789', email:'gnkumbula@nwpho.gov.zm', dateEngaged:'2022-08-22', status:'active', password:'1234'},
+    {id:5, name:'John Kapembwa', nrc:'567890/12/5', position:'Community Liaison Officer', department:'Community', district:'Mufumbwe', type:'CoAg', contact:'0966567890', email:'jkapembwa@nwpho.gov.zm', dateEngaged:'2021-11-05', status:'active', password:'1234'},
+    {id:6, name:'Susan Mumba', nrc:'678901/23/6', position:'Pharmacy Technologist', department:'Pharmacy', district:'Chavuma', type:'CoAg', contact:'0955678901', email:'smumba@nwpho.gov.zm', dateEngaged:'2023-01-20', status:'active', password:'1234'},
+    {id:7, name:'Dickson Banda', nrc:'789012/34/7', position:'Registry Clerk', department:'Administration', district:'Solwezi', type:'CoAg', contact:'0977789012', email:'dbanda@nwpho.gov.zm', dateEngaged:'2024-02-10', status:'active', password:'1234'},
+    {id:8, name:'Rose Chipoma', nrc:'890123/45/8', position:'Facility M&E Assistant', department:'M&E', district:'Manyinga', type:'CoAg', contact:'0966890123', email:'rchipoma@nwpho.gov.zm', dateEngaged:'2023-07-15', status:'active', password:'1234'},
+];
+
+const INIT_ATT = [
+    {id:1, staffId:1, date:'2025-05-05', clockIn:'08:02', clockOut:'17:05', hours:8.05, location:'Solwezi District Office', gpsVerified:true, task:'HTC coordination', status:'approved'},
+    {id:2, staffId:2, date:'2025-05-05', clockIn:'07:58', clockOut:'16:45', hours:7.78, location:'Kasempa District Hospital', gpsVerified:true, task:'M&E data capture', status:'approved'},
+    {id:3, staffId:3, date:'2025-05-05', clockIn:'08:15', clockOut:'17:00', hours:7.75, location:'Zambezi General Hospital', gpsVerified:true, task:'CD4 sample processing', status:'approved'},
+];
+
+const INIT_LEAVES = [
+    {id:1, staffId:2, type:'Annual', startDate:'2025-05-12', endDate:'2025-05-16', days:5, reason:'Family matters', attachment:null, status:'approved', appliedDate:'2025-05-01'},
+    {id:2, staffId:4, type:'Sick', startDate:'2025-05-06', endDate:'2025-05-07', days:2, reason:'Medical appointment', attachment:null, status:'approved', appliedDate:'2025-05-05'},
+];
+
+const INIT_ASSETS = [
+    {id:1, name:'Dell Latitude 5520', type:'Laptop', serial:'SN-DELL-001', assignedTo:1, issueDate:'2022-02-01', condition:'Good', status:'assigned'},
+    {id:2, name:'HP EliteBook 840', type:'Laptop', serial:'SN-HP-002', assignedTo:2, issueDate:'2021-07-01', condition:'Good', status:'assigned'},
+    {id:3, name:'Lenovo ThinkPad E14', type:'Laptop', serial:'SN-LEN-005', assignedTo:null, issueDate:null, condition:'Good', status:'available'},
+];
+
+// ==================== REPORTING & CSV EXPORT ====================
+function exportToCSV(data, filename) {
+    if (!data || data.length === 0) { alert('No data to export'); return; }
+    const headers = Object.keys(data[0]);
+    const csvRows = [headers.join(',')];
+    for (const row of data) {
+        const values = headers.map(header => {
+            const val = row[header] || '';
+            return `"${String(val).replace(/"/g, '""')}"`;
+        });
+        csvRows.push(values.join(','));
+    }
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', filename);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
+function ReportsModule({ attendance, staff, leaves }) {
+    const [reportType, setReportType] = useState('daily');
+    const [dateRange, setDateRange] = useState({ start: TODAY, end: TODAY });
+    const [reportData, setReportData] = useState([]);
+    
+    const generateReport = () => {
+        let filtered = [];
+        if (reportType === 'daily') {
+            filtered = attendance.filter(a => a.date === dateRange.start);
+        } else if (reportType === 'weekly') {
+            filtered = attendance.filter(a => a.date >= dateRange.start && a.date <= dateRange.end);
+        } else if (reportType === 'monthly') {
+            filtered = attendance.filter(a => a.date >= dateRange.start && a.date <= dateRange.end);
+        } else if (reportType === 'leave') {
+            filtered = leaves.filter(l => l.appliedDate >= dateRange.start && l.appliedDate <= dateRange.end);
+        }
+        
+        const enriched = filtered.map(record => {
+            const staffMember = staff.find(s => s.id === record.staffId);
+            if (reportType === 'leave') {
+                return {
+                    'Staff Name': staffMember?.name || 'Unknown',
+                    'Staff ID': staffMember?.id,
+                    'Department': staffMember?.department,
+                    'Leave Type': record.type,
+                    'Start Date': record.startDate,
+                    'End Date': record.endDate,
+                    'Days': record.days,
+                    'Reason': record.reason,
+                    'Status': record.status,
+                    'Applied Date': record.appliedDate
+                };
+            }
+            return {
+                'Staff Name': staffMember?.name || 'Unknown',
+                'Staff ID': staffMember?.id,
+                'Department': staffMember?.department,
+                'District': staffMember?.district,
+                'Date': record.date,
+                'Clock In': record.clockIn,
+                'Clock Out': record.clockOut || 'Not clocked out',
+                'Hours Worked': record.hours || calculateHours(record.clockIn, record.clockOut),
+                'Location': record.location,
+                'GPS Verified': record.gpsVerified ? 'Yes' : 'No',
+                'Task': record.task || ''
+            };
+        });
+        setReportData(enriched);
+    };
+    
+    const handleExport = () => {
+        if (reportData.length === 0) { alert('Generate report first'); return; }
+        const filename = `NWPHO_${reportType}_report_${dateRange.start}_to_${dateRange.end || dateRange.start}.csv`;
+        exportToCSV(reportData, filename);
+    };
+    
+    const setQuickRange = (type) => {
+        if (type === 'today') { setDateRange({ start: TODAY, end: TODAY }); setReportType('daily'); }
+        else if (type === 'week') { const w = getWeekRange(); setDateRange(w); setReportType('weekly'); }
+        else if (type === 'month') { const m = getMonthRange(); setDateRange(m); setReportType('monthly'); }
+    };
+    
+    // Auto-generate on range change
+    useEffect(() => { generateReport(); }, [reportType, dateRange.start, dateRange.end]);
+    
+    const totalHours = reportData.reduce((sum, r) => sum + (parseFloat(r['Hours Worked']) || 0), 0);
+    const avgHours = reportData.length > 0 ? (totalHours / reportData.length).toFixed(2) : 0;
+    
+    return (
+        <div>
+            <div style={{marginBottom:14}}><h3 style={{fontSize:16, fontWeight:500}}>Reports & Analytics</h3></div>
+            <div style={{background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:16, marginBottom:14}}>
+                <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px,1fr))', gap:10, marginBottom:12}}>
+                    <div><label style={{fontSize:11, color:'var(--color-text-secondary)'}}>Report Type</label>
+                    <select value={reportType} onChange={e=>setReportType(e.target.value)} style={{width:'100%'}}>
+                        <option value="daily">Daily Attendance</option>
+                        <option value="weekly">Weekly Attendance</option>
+                        <option value="monthly">Monthly Attendance</option>
+                        <option value="leave">Leave Reports</option>
+                    </select></div>
+                    <div><label style={{fontSize:11, color:'var(--color-text-secondary)'}}>Start Date</label>
+                    <input type="date" value={dateRange.start} onChange={e=>setDateRange(p=>({...p, start:e.target.value}))} style={{width:'100%'}}/></div>
+                    <div><label style={{fontSize:11, color:'var(--color-text-secondary)'}}>End Date</label>
+                    <input type="date" value={dateRange.end} onChange={e=>setDateRange(p=>({...p, end:e.target.value}))} style={{width:'100%'}}/></div>
+                </div>
+                <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
+                    <button onClick={()=>setQuickRange('today')} className="report-btn"><i className="ti ti-calendar-today"></i> Today</button>
+                    <button onClick={()=>setQuickRange('week')} className="report-btn"><i className="ti ti-calendar-week"></i> This Week</button>
+                    <button onClick={()=>setQuickRange('month')} className="report-btn"><i className="ti ti-calendar-month"></i> This Month</button>
+                    <button onClick={handleExport} className="report-btn" style={{background:'#0f6e56'}}><i className="ti ti-file-export"></i> Export CSV</button>
+                </div>
+            </div>
+            
+            {reportData.length > 0 && (
+                <div style={{background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:16, marginBottom:14}}>
+                    <div style={{display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:16}}>
+                        <div style={{textAlign:'center', padding:10, background:'#e6f1fb', borderRadius:8}}>
+                            <div style={{fontSize:11, color:'#042c53'}}>Total Records</div>
+                            <div style={{fontSize:22, fontWeight:600}}>{reportData.length}</div>
+                        </div>
+                        <div style={{textAlign:'center', padding:10, background:'#e1f5ee', borderRadius:8}}>
+                            <div style={{fontSize:11, color:'#0f6e56'}}>Total Hours</div>
+                            <div style={{fontSize:22, fontWeight:600}}>{totalHours.toFixed(1)}</div>
+                        </div>
+                        <div style={{textAlign:'center', padding:10, background:'#faeeda', borderRadius:8}}>
+                            <div style={{fontSize:11, color:'#854f0b'}}>Avg Hours/Day</div>
+                            <div style={{fontSize:22, fontWeight:600}}>{avgHours}</div>
+                        </div>
+                    </div>
+                    <div style={{overflowX:'auto'}}>
+                        <table style={{minWidth:600}}>
+                            <thead><tr>{Object.keys(reportData[0]).map(k=> <th key={k}>{k}</th>)}</tr></thead>
+                            <tbody>{reportData.map((row,i)=> <tr key={i}>{Object.values(row).map((v,j)=> <td key={j}>{v || '—'}</td>)}</tr>)}</tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+            {reportData.length === 0 && <div style={{textAlign:'center', padding:30, color:'var(--color-text-secondary)'}}>No records found for selected period</div>}
+        </div>
+    );
+}
+
+// ==================== STAFF DASHBOARD (Self Service) ====================
+function StaffDashboard({ staff, attendance, setAttendance, currentStaff }) {
+    const [gpsStatus, setGpsStatus] = useState({ getting: false, location: null, error: null, verified: false, matchedPlace: null });
+    const [showClockIn, setShowClockIn] = useState(false);
+    const [form, setForm] = useState({ location: '', task: '' });
+    
+    const todayRecord = attendance.find(a => a.staffId === currentStaff?.id && a.date === TODAY);
+    const isClockedIn = todayRecord && !todayRecord.clockOut;
+    const isClockedOut = todayRecord && todayRecord.clockOut;
+    const todayHours = todayRecord?.hours || (todayRecord?.clockOut ? calculateHours(todayRecord.clockIn, todayRecord.clockOut) : 0);
+    
+    const getCurrentLocation = useCallback(() => {
+        setGpsStatus({ getting: true, location: null, error: null, verified: false, matchedPlace: null });
+        if (!navigator.geolocation) {
+            setGpsStatus({ getting: false, location: null, error: 'GPS not supported', verified: false, matchedPlace: null });
+            return;
+        }
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const { latitude, longitude, accuracy } = position.coords;
+                let matched = null;
+                for (const loc of VALID_LOCATIONS) {
+                    if (loc.radius === 0) continue;
+                    const R = 6371e3;
+                    const φ1 = latitude * Math.PI/180;
+                    const φ2 = loc.lat * Math.PI/180;
+                    const Δφ = (loc.lat - latitude) * Math.PI/180;
+                    const Δλ = (loc.lng - longitude) * Math.PI/180;
+                    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
+                    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                    const distance = R * c;
+                    if (distance <= loc.radius) { matched = loc; break; }
+                }
+                const verified = !!matched;
+                setGpsStatus({
+                    getting: false,
+                    location: { lat: latitude, lng: longitude, accuracy },
+                    error: null,
+                    verified,
+                    matchedPlace: matched?.name || (verified ? 'Valid facility' : 'Unknown location')
+                });
+                if (verified && matched) setForm(p => ({ ...p, location: matched.name }));
+            },
+            (err) => { setGpsStatus({ getting: false, location: null, error: err.message, verified: false, matchedPlace: null }); },
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+        );
+    }, []);
+    
+    const handleClockIn = () => {
+        if (!gpsStatus.location) { alert('Please get GPS location first'); return; }
+        if (!form.location) { alert('Please enter work location'); return; }
+        if (isClockedIn) { alert('You are already clocked in today!'); return; }
+        const newRecord = {
+            id: Date.now(),
+            staffId: currentStaff.id,
+            date: TODAY,
+            clockIn: NOW(),
+            clockOut: '',
+            hours: 0,
+            location: form.location,
+            gpsVerified: gpsStatus.verified,
+            gpsLocation: gpsStatus.matchedPlace || form.location,
+            task: form.task,
+            status: 'approved'
+        };
+        setAttendance(p => [...p, newRecord]);
+        setShowClockIn(false);
+        setForm({ location: '', task: '' });
+        setGpsStatus({ getting: false, location: null, error: null, verified: false, matchedPlace: null });
+        alert('✅ Clock in successful!');
+    };
+    
+    const handleClockOut = () => {
+        if (!todayRecord) { alert('You haven\'t clocked in today!'); return; }
+        if (todayRecord.clockOut) { alert('You already clocked out!'); return; }
+        const outTime = NOW();
+        const hoursWorked = calculateHours(todayRecord.clockIn, outTime);
+        setAttendance(p => p.map(a => a.id === todayRecord.id ? { ...a, clockOut: outTime, hours: hoursWorked } : a));
+        alert(`🚪 Clock out successful! You worked ${hoursWorked.toFixed(2)} hours today.`);
+    };
+    
+    const myRecentAttendance = attendance.filter(a => a.staffId === currentStaff?.id).slice(-7).reverse();
+    
+    return (
+        <div>
+            <div style={{marginBottom:14}}>
+                <div style={{fontSize:18, fontWeight:600}}>Welcome, {currentStaff?.name}!</div>
+                <div style={{fontSize:12, color:'var(--color-text-secondary)'}}>{currentStaff?.position} · {currentStaff?.department} · {currentStaff?.district}</div>
+            </div>
+            
+            {/* Clock In/Out Card */}
+            <div style={{background:'linear-gradient(135deg, #0f4c75 0%, #1a5c96 100%)', borderRadius:'var(--border-radius-lg)', padding:20, marginBottom:14, color:'white'}}>
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:12}}>
+                    <div>
+                        <div style={{fontSize:13, opacity:0.8}}>Today's Status</div>
+                        {!isClockedIn && !isClockedOut && <div style={{fontSize:24, fontWeight:600}}>Not clocked in</div>}
+                        {isClockedIn && <div><div style={{fontSize:24, fontWeight:600}}>✅ Clocked In</div><div style={{fontSize:12, opacity:0.8}}>Since {todayRecord.clockIn} at {todayRecord.location}</div></div>}
+                        {isClockedOut && <div><div style={{fontSize:24, fontWeight:600}}>✅ Clocked Out</div><div style={{fontSize:12, opacity:0.8}}>{todayHours.toFixed(2)} hours worked today</div></div>}
+                    </div>
+                    <div style={{display:'flex', gap:10}}>
+                        {!isClockedIn && !isClockedOut && (
+                            <button onClick={()=>{ setShowClockIn(true); getCurrentLocation(); }} style={{background:'white', color:'#0f4c75', border:'none', padding:'10px 20px', borderRadius:'var(--border-radius-md)', fontWeight:600, fontSize:14, cursor:'pointer'}}>
+                                <i className="ti ti-clock-check"></i> Clock In
+                            </button>
+                        )}
+                        {isClockedIn && !isClockedOut && (
+                            <button onClick={handleClockOut} style={{background:'#f5c4b3', color:'#4a1b0c', border:'none', padding:'10px 20px', borderRadius:'var(--border-radius-md)', fontWeight:600, fontSize:14, cursor:'pointer'}}>
+                                <i className="ti ti-clock-off"></i> Clock Out
+                            </button>
+                        )}
+                        {isClockedOut && (
+                            <div style={{background:'rgba(255,255,255,0.2)', padding:'10px 20px', borderRadius:'var(--border-radius-md)', fontSize:14}}>Come back tomorrow</div>
+                        )}
+                    </div>
+                </div>
+            </div>
+            
+            {/* Clock In Modal */}
+            {showClockIn && (
+                <div style={{position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000}} onClick={()=>setShowClockIn(false)}>
+                    <div style={{background:'white', borderRadius:'var(--border-radius-lg)', padding:20, maxWidth:400, width:'90%'}} onClick={e=>e.stopPropagation()}>
+                        <h4 style={{marginBottom:12}}>Clock In</h4>
+                        <div style={{marginBottom:12}}>
+                            <button onClick={getCurrentLocation} style={{background:'#0f4c75', color:'white', border:'none', padding:'8px 16px', borderRadius:6, width:'100%'}}>
+                                <i className="ti ti-map-pin"></i> {gpsStatus.getting ? 'Getting GPS...' : 'Get Current Location'}
+                            </button>
+                            {gpsStatus.location && <GPSStatus location={{verified: gpsStatus.verified, place: gpsStatus.matchedPlace}} accuracy={gpsStatus.location.accuracy} />}
+                            {gpsStatus.error && <div style={{fontSize:11, color:'red', marginTop:5}}>{gpsStatus.error}</div>}
+                        </div>
+                        <input placeholder="Work Location" value={form.location} onChange={e=>setForm(p=>({...p, location:e.target.value}))} style={{width:'100%', marginBottom:12}}/>
+                        <textarea placeholder="Task / Activity (optional)" value={form.task} onChange={e=>setForm(p=>({...p, task:e.target.value}))} rows={2} style={{width:'100%', marginBottom:12}}/>
+                        <div style={{display:'flex', gap:8}}>
+                            <button onClick={handleClockIn} style={{background:'#0f6e56', color:'white', border:'none', padding:'8px 16px', borderRadius:6, flex:1, cursor:'pointer'}}>Confirm Clock In</button>
+                            <button onClick={()=>setShowClockIn(false)} style={{background:'#ccc', border:'none', padding:'8px 16px', borderRadius:6, cursor:'pointer'}}>Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+            {/* Recent Attendance */}
+            <div style={{background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', overflow:'hidden'}}>
+                <div style={{padding:'12px 16px', borderBottom:'0.5px solid var(--color-border-tertiary)', fontWeight:500}}>Recent Attendance History</div>
+                <div style={{overflowX:'auto'}}>
+                    <table style={{minWidth:500}}>
+                        <thead><tr><th>Date</th><th>Clock In</th><th>Clock Out</th><th>Hours</th><th>Location</th><th>GPS</th></tr></thead>
+                        <tbody>{myRecentAttendance.map(a=>(
+                            <tr key={a.id}><td>{fmtDate(a.date)}</td><td>{a.clockIn}</td><td>{a.clockOut || '—'}</td><td>{a.hours ? a.hours.toFixed(2) : '—'}</td><td>{a.location}</td><td>{a.gpsVerified ? <i className="ti ti-map-pin-check" style={{color:'#0f6e56'}}></i> : <i className="ti ti-alert-triangle" style={{color:'#854f0b'}}></i>}</td></tr>
+                        ))}</tbody>
+                    </table>
+                    {myRecentAttendance.length === 0 && <div style={{padding:20, textAlign:'center', color:'var(--color-text-secondary)'}}>No attendance records yet</div>}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ==================== LEAVE MODULE WITH FILE UPLOAD ====================
+function LeaveModule({ role, staff, leaves, setLeaves, currentStaff }) {
+    const [showForm, setShowForm] = useState(false);
+    const [attachments, setAttachments] = useState({});
+    const blank = { staffId: currentStaff?.id || '', type: 'Annual', startDate: '', endDate: '', reason: '' };
+    const [form, setForm] = useState(blank);
+    
+    const days = (s,e) => s && e ? Math.max(0, (new Date(e)-new Date(s))/86400000+1) : 0;
+    
+    const handleFileUpload = (e, leaveId = null) => {
+        const file = e.target.files[0];
+        if (file && file.size > 5 * 1024 * 1024) { alert('File too large. Max 5MB'); return; }
+        if (file) {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                if (leaveId) setAttachments(p => ({ ...p, [leaveId]: { name: file.name, data: reader.result } }));
+                else setAttachments(p => ({ ...p, pending: { name: file.name, data: reader.result } }));
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+    
+    const apply = () => {
+        if (!form.staffId || !form.startDate || !form.endDate) { alert('Please fill all required fields.'); return; }
+        const d = days(form.startDate, form.endDate);
+        if (d <= 0) { alert('End date must be after start date.'); return; }
+        const newLeave = {
+            id: Date.now(),
+            staffId: parseInt(form.staffId),
+            type: form.type,
+            startDate: form.startDate,
+            endDate: form.endDate,
+            days: d,
+            reason: form.reason,
+            attachment: attachments.pending || null,
+            status: 'pending',
+            appliedDate: TODAY
+        };
+        setLeaves(p => [...p, newLeave]);
+        setForm(blank);
+        setAttachments({});
+        setShowForm(false);
+        alert('✅ Leave application submitted successfully!');
+    };
+    
+    const upd = (id, status) => setLeaves(p => p.map(l => l.id === id ? { ...l, status } : l));
+    
+    const myLeaves = leaves.filter(l => l.staffId === currentStaff?.id);
+    const pendingLeaves = role !== 'staff' ? leaves.filter(l => l.status === 'pending') : [];
+    
+    return (
+        <div>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10}}>
+                <div style={{fontSize:15, fontWeight:500}}>Leave Management</div>
+                <button onClick={()=>setShowForm(f=>!f)} style={{background:'#0f4c75', color:'#fff', border:'none', padding:'6px 13px', borderRadius:6, cursor:'pointer', fontSize:12}}>
+                    <i className={`ti ${showForm?'ti-x':'ti-plus'}`}></i> {showForm?'Cancel':'Apply for Leave'}
+                </button>
+            </div>
+            
+            {showForm && (
+                <div style={{background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:16, marginBottom:10}}>
+                    <div style={{fontSize:13, fontWeight:500, marginBottom:10}}>Leave Application Form</div>
+                    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10}}>
+                        <div><label style={{fontSize:11, color:'var(--color-text-secondary)'}}>Staff Member *</label>
+                        <select value={form.staffId} onChange={e=>setForm(p=>({...p, staffId:e.target.value}))} style={{width:'100%'}} disabled={role==='staff'}>
+                            {staff.filter(s=>s.status==='active').map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                        </select></div>
+                        <div><label>Leave Type</label><select value={form.type} onChange={e=>setForm(p=>({...p, type:e.target.value}))} style={{width:'100%'}}>{LEAVE_TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
+                        <div><label>Start Date *</label><input type="date" value={form.startDate} onChange={e=>setForm(p=>({...p, startDate:e.target.value}))} style={{width:'100%'}}/></div>
+                        <div><label>End Date *</label><input type="date" value={form.endDate} onChange={e=>setForm(p=>({...p, endDate:e.target.value}))} style={{width:'100%'}}/></div>
+                        <div style={{gridColumn:'1/-1'}}><label>Reason</label><textarea value={form.reason} onChange={e=>setForm(p=>({...p, reason:e.target.value}))} rows={2} style={{width:'100%'}} placeholder="Brief reason for leave..."/></div>
+                        <div style={{gridColumn:'1/-1'}}>
+                            <label>Supporting Document (Optional, Max 5MB)</label>
+                            <div className="file-input-wrapper" style={{width:'100%', border:'0.5px dashed var(--color-border-secondary)', borderRadius:6, textAlign:'center', padding:'8px', background:'var(--color-background-secondary)'}}>
+                                <input type="file" accept=".pdf,.jpg,.png,.docx" onChange={handleFileUpload}/>
+                                <span>{attachments.pending ? `📎 ${attachments.pending.name}` : 'Click or drag to upload file'}</span>
+                            </div>
+                        </div>
+                    </div>
+                    {form.startDate && form.endDate && days(form.startDate,form.endDate)>0 && <div style={{marginTop:8, fontSize:12, color:'#0f6e56'}}>Duration: {days(form.startDate,form.endDate)} day(s)</div>}
+                    <div style={{marginTop:12}}><button onClick={apply} style={{background:'#0f4c75', color:'#fff', border:'none', padding:'8px 20px', borderRadius:6, cursor:'pointer'}}>Submit Application</button></div>
+                </div>
+            )}
+            
+            {/* My Leave Requests */}
+            <div style={{background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', marginBottom:10, overflow:'hidden'}}>
+                <div style={{padding:'10px 14px', borderBottom:'0.5px solid var(--color-border-tertiary)', fontWeight:500}}>My Leave Requests</div>
+                <div style={{overflowX:'auto'}}>
+                    <table style={{minWidth:550}}>
+                        <thead><tr><th>Type</th><th>Dates</th><th>Days</th><th>Reason</th><th>Attachment</th><th>Status</th></tr></thead>
+                        <tbody>{myLeaves.map(l=>(
+                            <tr key={l.id}>
+                                <td><Badge text={l.type} color="blue"/></td>
+                                <td style={{fontSize:11}}>{fmtDate(l.startDate)} - {fmtDate(l.endDate)}</td>
+                                <td>{l.days}</td>
+                                <td style={{maxWidth:150, overflow:'hidden', textOverflow:'ellipsis'}}>{l.reason}</td>
+                                <td>{l.attachment ? <a href={l.attachment.data} download={l.attachment.name} style={{color:'#0f4c75'}}>📎 View</a> : '—'}</td>
+                                <td><Badge text={l.status} color={l.status==='approved'?'green':l.status==='rejected'?'red':'amber'}/></td>
+                            </tr>
+                        ))}</tbody>
+                    </table>
+                    {myLeaves.length===0 && <div style={{padding:20, textAlign:'center', color:'var(--color-text-secondary)'}}>No leave requests yet</div>}
+                </div>
+            </div>
+            
+            {/* Pending Approvals (Admin/Supervisor) */}
+            {pendingLeaves.length > 0 && role !== 'staff' && (
+                <div style={{background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', overflow:'hidden'}}>
+                    <div style={{padding:'10px 14px', borderBottom:'0.5px solid var(--color-border-tertiary)', fontWeight:500, background:'#faeeda'}}>Pending Approvals ({pendingLeaves.length})</div>
+                    <div style={{overflowX:'auto'}}>
+                        <table style={{minWidth:600}}>
+                            <thead><tr><th>Staff</th><th>Type</th><th>Dates</th><th>Days</th><th>Reason</th><th>Attachment</th><th>Actions</th></tr></thead>
+                            <tbody>{pendingLeaves.map(l=>{
+                                const s = staff.find(x=>x.id===l.staffId);
+                                return <tr key={l.id}>
+                                    <td>{s?.name}<br/><span style={{fontSize:10, color:'var(--color-text-secondary)'}}>{s?.department}</span></td>
+                                    <td><Badge text={l.type} color="blue"/></td>
+                                    <td style={{fontSize:11}}>{fmtDate(l.startDate)} - {fmtDate(l.endDate)}</td>
+                                    <td>{l.days}</td>
+                                    <td style={{maxWidth:150}}>{l.reason}</td>
+                                    <td>{l.attachment ? <a href={l.attachment.data} download={l.attachment.name} style={{color:'#0f4c75'}}>📎 Download</a> : '—'}</td>
+                                    <td><div style={{display:'flex', gap:4}}><button onClick={()=>upd(l.id,'approved')} style={{background:'#eaf3de', color:'#27500a', border:'none', padding:'4px 10px', borderRadius:4, cursor:'pointer', fontSize:11}}>Approve</button><button onClick={()=>upd(l.id,'rejected')} style={{background:'#fcebeb', color:'#501313', border:'none', padding:'4px 10px', borderRadius:4, cursor:'pointer', fontSize:11}}>Reject</button></div></td>
+                                </tr>;
+                            })}</tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ==================== ASSET MODULE ====================
+function AssetModule({ role, staff, assets, setAssets }) {
+    const [showForm, setShowForm] = useState(false);
+    const [ftype, setFtype] = useState('');
+    const [fstat, setFstat] = useState('');
+    const blank = { name:'', type:'Laptop', serial:'', assignedTo:'', issueDate:'', condition:'Good' };
+    const [form, setForm] = useState(blank);
+    const filtered = assets.filter(a=>(!ftype||a.type===ftype)&&(!fstat||a.status===fstat));
+    const save = () => {
+        if(!form.name || !form.serial){alert('Asset name and serial number are required.');return;}
+        setAssets(p=>[...p,{id:Date.now(), name:form.name, type:form.type, serial:form.serial, assignedTo:form.assignedTo?parseInt(form.assignedTo):null, issueDate:form.issueDate||null, condition:form.condition, status:form.assignedTo?'assigned':'available'}]);
+        setForm(blank); setShowForm(false);
+    };
+    const ret = id => setAssets(p=>p.map(a=>a.id===id ? {...a, assignedTo:null, issueDate:null, status:'available'} : a));
+    
+    return (
+        <div>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10}}>
+                <div style={{fontSize:15, fontWeight:500}}>Asset Inventory</div>
+                {role==='admin' && <button onClick={()=>setShowForm(f=>!f)} style={{background:'#0f4c75', color:'#fff', border:'none', padding:'6px 13px', borderRadius:6, cursor:'pointer', fontSize:12}}><i className={`ti ${showForm?'ti-x':'ti-plus'}`}></i> {showForm?'Cancel':'Register Asset'}</button>}
+            </div>
+            <div style={{display:'flex', gap:8, marginBottom:8}}>
+                <select value={ftype} onChange={e=>setFtype(e.target.value)} style={{fontSize:13}}><option value="">All Types</option>{ASSET_TYPES.map(t=><option key={t}>{t}</option>)}</select>
+                <select value={fstat} onChange={e=>setFstat(e.target.value)} style={{fontSize:13}}><option value="">All Status</option>{['assigned','available','maintenance'].map(s=><option key={s}>{s}</option>)}</select>
+                <button onClick={()=>{setFtype(''); setFstat('');}} style={{fontSize:11, background:'none', border:'0.5px solid var(--color-border-secondary)', padding:'3px 10px', borderRadius:4, cursor:'pointer'}}>Clear</button>
+            </div>
+            <div style={{background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', overflow:'auto'}}>
+                <table style={{minWidth:600}}>
+                    <thead><tr><th>Asset</th><th>Type</th><th>Serial</th><th>Assigned To</th><th>Condition</th><th>Status</th><th></th></tr></thead>
+                    <tbody>{filtered.map((a,i)=>{
+                        const s = a.assignedTo ? staff.find(x=>x.id===a.assignedTo) : null;
+                        return <tr key={a.id}>
+                            <td><div style={{display:'flex', alignItems:'center', gap:6}}><i className={`ti ${ASSET_ICON[a.type]||'ti-package'}`}></i>{a.name}</div></td>
+                            <td>{a.type}</td><td style={{fontFamily:'monospace', fontSize:10}}>{a.serial}</td>
+                            <td>{s ? <div style={{display:'flex', alignItems:'center', gap:5}}><Av name={s.name} size={22}/>{s.name}</div> : 'Unassigned'}</td>
+                            <td><Badge text={a.condition} color={a.condition==='Good'||a.condition==='New'?'green':a.condition==='Fair'?'amber':'red'}/></td>
+                            <td><Badge text={a.status} color={a.status==='assigned'?'blue':a.status==='available'?'green':'red'}/></td>
+                            <td>{a.status==='assigned' && role==='admin' && <button onClick={()=>ret(a.id)} style={{fontSize:10, padding:'2px 8px', borderRadius:3, border:'0.5px solid var(--color-border-secondary)', background:'none', cursor:'pointer'}}>Return</button>}</td>
+                        </tr>;
+                    })}</tbody>
+                </table>
+                {filtered.length===0 && <div style={{padding:20, textAlign:'center', color:'var(--color-text-secondary)'}}>No assets found</div>}
+            </div>
+            {showForm && (
+                <div style={{background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:14, marginTop:10}}>
+                    <div style={{fontSize:13, fontWeight:500, marginBottom:10}}>Register New Asset</div>
+                    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10}}>
+                        <div><label>Asset Name *</label><input value={form.name} onChange={e=>setForm(p=>({...p, name:e.target.value}))} style={{width:'100%'}}/></div>
+                        <div><label>Type</label><select value={form.type} onChange={e=>setForm(p=>({...p, type:e.target.value}))} style={{width:'100%'}}>{ASSET_TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
+                        <div><label>Serial Number *</label><input value={form.serial} onChange={e=>setForm(p=>({...p, serial:e.target.value}))} style={{width:'100%'}}/></div>
+                        <div><label>Condition</label><select value={form.condition} onChange={e=>setForm(p=>({...p, condition:e.target.value}))} style={{width:'100%'}}>{['New','Good','Fair','Poor'].map(c=><option key={c}>{c}</option>)}</select></div>
+                        <div><label>Assign To</label><select value={form.assignedTo} onChange={e=>setForm(p=>({...p, assignedTo:e.target.value}))} style={{width:'100%'}}><option value="">Unassigned</option>{staff.filter(s=>s.status==='active').map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+                        <div><label>Issue Date</label><input type="date" value={form.issueDate} onChange={e=>setForm(p=>({...p, issueDate:e.target.value}))} style={{width:'100%'}}/></div>
+                    </div>
+                    <div style={{marginTop:10}}><button onClick={save} style={{background:'#0f4c75', color:'#fff', border:'none', padding:'6px 16px', borderRadius:6, cursor:'pointer'}}>Save Asset</button></div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ==================== STAFF MANAGEMENT (HR) ====================
+function StaffMgmtModule({ staff, setStaff }) {
+    const [search, setSearch] = useState('');
+    const [fdist, setFdist] = useState('');
+    const [sel, setSel] = useState(null);
+    const blank = {name:'', nrc:'', position:'', department:'', district:'Solwezi', contact:'', email:'', dateEngaged:'', status:'active'};
+    const [form, setForm] = useState(blank);
+    const [showAdd, setShowAdd] = useState(false);
+    
+    const filtered = staff.filter(s=>(!search||s.name.toLowerCase().includes(search.toLowerCase())||s.position.toLowerCase().includes(search.toLowerCase()))&&(!fdist||s.district===fdist));
+    const save = () => {
+        if(!form.name||!form.position){alert('Name and position required');return;}
+        setStaff(p=>[...p,{...form, id:Date.now(), type:'CoAg'}]);
+        setForm(blank); setShowAdd(false);
+    };
+    
+    if(sel) {
+        const s = staff.find(x=>x.id===sel);
+        if(!s){setSel(null); return null;}
+        return <div><button onClick={()=>setSel(null)} style={{marginBottom:10, background:'none', border:'none', color:'#0f4c75'}}>← Back to Staff List</button>
+        <div style={{background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:18}}>
+            <div style={{display:'flex', gap:14, marginBottom:16}}><Av name={s.name} size={52}/><div><div style={{fontSize:18, fontWeight:500}}>{s.name}</div><div>{s.position} · {s.department}</div></div></div>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>{[['NRC',s.nrc],['Contact',s.contact],['Email',s.email],['District',s.district],['Date Engaged',fmtDate(s.dateEngaged)],['Status',s.status]].map(([l,v])=><div key={l}><div style={{fontSize:11, color:'var(--color-text-secondary)'}}>{l}</div><div>{v||'—'}</div></div>)}</div>
+            <button onClick={()=>setStaff(p=>p.map(x=>x.id===sel?{...x, status:x.status==='active'?'inactive':'active'}:x))} style={{marginTop:14, fontSize:12, padding:'6px 14px', border:'0.5px solid var(--color-border-secondary)', background:'none', borderRadius:4}}>{s.status==='active'?'Deactivate':'Activate'}</button>
+        </div></div>;
+    }
+    
+    return (
+        <div>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10}}>
+                <div style={{fontSize:15, fontWeight:500}}>Staff Directory ({filtered.length})</div>
+                <button onClick={()=>setShowAdd(true)} style={{background:'#0f4c75', color:'#fff', border:'none', padding:'6px 13px', borderRadius:6, cursor:'pointer', fontSize:12}}><i className="ti ti-plus"></i> Add Staff</button>
+            </div>
+            <div style={{display:'flex', gap:8, marginBottom:10}}>
+                <div style={{flex:1, position:'relative'}}><i className="ti ti-search" style={{position:'absolute', left:9, top:'50%', transform:'translateY(-50%)'}}></i><input placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)} style={{width:'100%', paddingLeft:30}}/></div>
+                <select value={fdist} onChange={e=>setFdist(e.target.value)}><option value="">All Districts</option>{DISTRICTS.map(d=><option key={d}>{d}</option>)}</select>
+            </div>
+            <div style={{background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', overflow:'auto'}}>
+                <table style={{minWidth:550}}>
+                    <thead><tr><th>Name</th><th>Position</th><th>Department</th><th>District</th><th>Status</th><th></th></tr></thead>
+                    <tbody>{filtered.map(s=>(
+                        <tr key={s.id}><td><div style={{display:'flex', alignItems:'center', gap:6}}><Av name={s.name} size={24}/>{s.name}</div></td><td>{s.position}</td><td>{s.department}</td><td>{s.district}</td><td><Badge text={s.status} color={s.status==='active'?'green':'gray'}/></td><td><button onClick={()=>setSel(s.id)} style={{background:'none', border:'none', cursor:'pointer', color:'#0f4c75'}}><i className="ti ti-eye"></i></button></td></tr>
+                    ))}</tbody>
+                </table>
+            </div>
+            {showAdd && <div style={{position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000}} onClick={()=>setShowAdd(false)}><div style={{background:'white', borderRadius:12, padding:20, maxWidth:450, width:'90%'}} onClick={e=>e.stopPropagation()}><h4>Add New Staff</h4>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
+                <input placeholder="Full Name" value={form.name} onChange={e=>setForm(p=>({...p, name:e.target.value}))} style={{gridColumn:'1/-1'}}/>
+                <input placeholder="Position" value={form.position} onChange={e=>setForm(p=>({...p, position:e.target.value}))}/>
+                <select value={form.department} onChange={e=>setForm(p=>({...p, department:e.target.value}))}><option value="">Department</option>{DEPTS.map(d=><option key={d}>{d}</option>)}</select>
+                <select value={form.district} onChange={e=>setForm(p=>({...p, district:e.target.value}))}>{DISTRICTS.map(d=><option key={d}>{d}</option>)}</select>
+                <input placeholder="Contact" value={form.contact} onChange={e=>setForm(p=>({...p, contact:e.target.value}))}/>
+                <input placeholder="Email" value={form.email} onChange={e=>setForm(p=>({...p, email:e.target.value}))}/>
+                <input type="date" placeholder="Date Engaged" value={form.dateEngaged} onChange={e=>setForm(p=>({...p, dateEngaged:e.target.value}))} style={{gridColumn:'1/-1'}}/>
+            </div>
+            <div style={{marginTop:12, display:'flex', gap:8}}><button onClick={save} style={{background:'#0f4c75', color:'white', border:'none', padding:'8px 16px', borderRadius:6}}>Save</button><button onClick={()=>setShowAdd(false)} style={{background:'#ccc', border:'none', padding:'8px 16px', borderRadius:6}}>Cancel</button></div></div></div>}
+        </div>
+    );
+}
+
+// ==================== MAIN APP ====================
+function App() {
+    const [role, setRole] = useState('staff');
+    const [mod, setMod] = useState('dashboard');
+    const [staff, setStaff] = useState(INIT_STAFF);
+    const [att, setAtt] = useState(INIT_ATT);
+    const [leaves, setLeaves] = useState(INIT_LEAVES);
+    const [assets, setAssets] = useState(INIT_ASSETS);
+    const [currentStaff, setCurrentStaff] = useState(INIT_STAFF[0]);
+    
+    const nav = [
+        {id:'dashboard', icon:'ti-layout-dashboard', lbl:'Dashboard'},
+        {id:'staff', icon:'ti-users', lbl:'Staff Mgmt'},
+        {id:'attendance', icon:'ti-clock', lbl:'Attendance'},
+        {id:'leave', icon:'ti-calendar-off', lbl:'Leave'},
+        {id:'assets', icon:'ti-device-laptop', lbl:'Assets'},
+        {id:'reports', icon:'ti-chart-bar', lbl:'Reports'}
+    ];
+    
+    return (
+        <div style={{fontFamily:'var(--font-sans)', minHeight:600, background:'var(--color-background-tertiary)'}}>
+            <div style={{background:'#0f4c75', padding:'9px 14px', display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:8}}>
+                <div style={{display:'flex', alignItems:'center', gap:10}}>
+                    <i className="ti ti-heartbeat" style={{color:'#fac775', fontSize:18}}></i>
+                    <div><div style={{color:'#fff', fontWeight:500, fontSize:13}}>NW PHO E-Time System</div><div style={{color:'#9fe1cb', fontSize:10}}>North Western PHO · CDC Supported</div></div>
+                </div>
+                <div style={{display:'flex', alignItems:'center', gap:8}}>
+                    <span style={{color:'#9fe1cb', fontSize:11}}>Role:</span>
+                    <select value={role} onChange={e=>setRole(e.target.value)} style={{fontSize:11, padding:'2px 7px', borderRadius:4, border:'1px solid rgba(255,255,255,0.3)', background:'rgba(255,255,255,0.15)', color:'#fff'}}>
+                        <option value="staff">Staff</option><option value="admin">Admin/HR</option><option value="supervisor">Supervisor</option>
+                    </select>
+                    <select value={currentStaff.id} onChange={e=>setCurrentStaff(staff.find(s=>s.id===parseInt(e.target.value)) || staff[0])} style={{fontSize:11, padding:'2px 7px', borderRadius:4, border:'1px solid rgba(255,255,255,0.3)', background:'rgba(255,255,255,0.15)', color:'#fff'}}>
+                        {staff.filter(s=>s.status==='active').map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                </div>
+            </div>
+            <div style={{background:'var(--color-background-primary)', borderBottom:'0.5px solid var(--color-border-tertiary)', display:'flex', padding:'0 6px', overflowX:'auto'}}>
+                {nav.map(n=>(
+                    <button key={n.id} onClick={()=>setMod(n.id)} style={{padding:'8px 12px', border:'none', background:'none', cursor:'pointer', fontSize:12, color:mod===n.id?'#0f4c75':'var(--color-text-secondary)', borderBottom:mod===n.id?'2px solid #0f4c75':'2px solid transparent', display:'flex', alignItems:'center', gap:5, whiteSpace:'nowrap'}}>
+                        <i className={`ti ${n.icon}`}></i>{n.lbl}
+                    </button>
+                ))}
+            </div>
+            <div style={{padding:14}}>
+                {mod==='dashboard' && <StaffDashboard staff={staff} attendance={att} setAttendance={setAtt} currentStaff={currentStaff} />}
+                {mod==='staff' && role!=='staff' && <StaffMgmtModule staff={staff} setStaff={setStaff} />}
+                {mod==='staff' && role==='staff' && <div style={{textAlign:'center', padding:40}}><i className="ti ti-lock" style={{fontSize:40}}></i><p>Access restricted. Contact HR for staff management.</p></div>}
+                {mod==='attendance' && <AttModule role={role} staff={staff} attendance={att} setAttendance={setAtt} currentStaff={currentStaff} />}
+                {mod==='leave' && <LeaveModule role={role} staff={staff} leaves={leaves} setLeaves={setLeaves} currentStaff={currentStaff} />}
+                {mod==='assets' && <AssetModule role={role} staff={staff} assets={assets} setAssets={setAssets} />}
+                {mod==='reports' && <ReportsModule attendance={att} staff={staff} leaves={leaves} />}
+            </div>
+        </div>
+    );
+}
+
+ReactDOM.render(React.createElement(App), document.getElementById('root'));
+</script>
+</body>
+</html>
